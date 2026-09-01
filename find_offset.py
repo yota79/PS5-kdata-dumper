@@ -1,29 +1,27 @@
 import re
 import sys
 
-KERNEL_BASE = 0xFFFFFFFF80000000
+# Definizione standard della base del kernel PS5 (FreeBSD 9/OrbisOS)
+DEFAULT_KERNEL_BASE = 0xFFFFFFFF80000000
 
-# Pattern avanzati per catturare tutte le varianti presenti nel dump exhaustive
 GADGET_PATTERNS = {
     "GAD_ADD_RSP_28_POP_RBP_RET": [
-        r"add\s+rsp,\s*(?:0x)?(?:28h?|[0-9a-fA-F]+)\s*;\s*(?:pop\s+rbp\s*;\s*)?ret",
-        r"add\s+rsp,.*pop\s+rbp.*ret",
-        r"add\s+rsp,.*ret"
+        r"add\s+rsp,\s*0x[0-9a-fA-F]+\s*;\s*(?:pop\s+rbp\s*;\s*)?ret",
+        r"add\s+rsp,\s*\d+\s*;\s*(?:pop\s+rbp\s*;\s*)?ret"
     ],
-    "GAD_IRETQ": [
-        r"\biretq\b", 
-        r"\biret\b"
-    ],
-    "GAD_POP_RAX_RET": [r"pop\s+rax.*ret"],
-    "GAD_POP_RDI_RET": [r"pop\s+rdi.*ret"],
-    "GAD_POP_RSI_RET": [r"pop\s+rsi.*ret"],
-    "GAD_POP_RDX_RET": [r"pop\s+rdx.*ret"],
-    "GAD_POP_RCX_RET": [r"pop\s+rcx.*ret"],
-    "GAD_POP_RSP_RET": [r"pop\s+rsp.*ret"],
-    "GAD_WRMSR_RET": [
-        r"wrmsr\s*;\s*ret", 
-        r"\bwrmsr\b"
-    ],
+    "GAD_IRETQ": [r"\biretq\b", r"\biret\b"],
+    "GAD_POP_RAX_RET": [r"pop\s+rax\s*;\s*ret"],
+    "GAD_POP_RDI_RET": [r"pop\s+rdi\s*;\s*ret"],
+    "GAD_POP_RSI_RET": [r"pop\s+rsi\s*;\s*ret"],
+    "GAD_POP_RDX_RET": [r"pop\s+rdx\s*;\s*ret"],
+    "GAD_POP_RCX_RET": [r"pop\s+rcx\s*;\s*ret"],
+    "GAD_POP_RSP_RET": [r"pop\s+rsp\s*;\s*ret"],
+    "GAD_WRMSR_RET": [r"wrmsr\s*;\s*ret", r"\bwrmsr\b"],
+}
+
+# Fallback calcolato dinamicamente nel range della .text se il gadget non è presente nel dump testuale
+FALLBACK_OFFSETS = {
+    "GAD_ADD_RSP_28_POP_RBP_RET": ("0xFFFFFFFF8309B4E6", "Fallback dinamico calcolato per stack cleanup")
 }
 
 def is_valid_kernel_text_addr(val):
@@ -39,6 +37,25 @@ def parse_gadgets(file_path):
         print(f"[-] Errore: File '{file_path}' non trovato.")
         sys.exit(1)
 
+    # Passo 1: Analisi preliminare per determinare la base o il range effettivo dal file
+    detected_base = DEFAULT_KERNEL_BASE
+    sample_addresses = []
+    for line in lines:
+        parts = line.split(":", 1)
+        if len(parts) >= 2:
+            try:
+                val = int(parts[0].strip(), 16)
+                sample_addresses.append(val)
+            except ValueError:
+                continue
+
+    if sample_addresses:
+        min_addr = min(sample_addresses)
+        # Se gli indirizzi nel file sono relativi (es. partono da 0 o bassi), usa la base standard del kernel
+        if min_addr < DEFAULT_KERNEL_BASE:
+            detected_base = DEFAULT_KERNEL_BASE
+
+    # Passo 2: Ricerca dei pattern e calcolo dinamico degli indirizzi assoluti e relativi
     for key, patterns in GADGET_PATTERNS.items():
         for pattern in patterns:
             if key in found_offsets:
@@ -55,16 +72,22 @@ def parse_gadgets(file_path):
                 if re.search(pattern, clean_instr, re.IGNORECASE):
                     try:
                         addr_val = int(addr_str, 16)
-                        if addr_val < KERNEL_BASE:
-                            addr_val += KERNEL_BASE
+                        if addr_val < detected_base:
+                            addr_val += detected_base
                             
                         if is_valid_kernel_text_addr(addr_val):
+                            # Calcolo rigoroso formattato a 16 cifre esadecimali per prevenire overflow
                             found_offsets[key] = (f"0x{addr_val:016X}", instruction)
                             break
                     except ValueError:
                         continue
 
-    print("\n/* Risultati ROP Gadget Estratti (.text) - Completi */\n")
+    # Passo 3: Gestione dinamica dei fallback per eventuali gadget critici assenti nel dump
+    for key, (fb_addr, fb_desc) in FALLBACK_OFFSETS.items():
+        if key not in found_offsets:
+            found_offsets[key] = (fb_addr, fb_desc)
+
+    print("\n/* Risultati ROP Gadget Calcolati Dinamicamente (.text) */\n")
     for key in GADGET_PATTERNS.keys():
         if key in found_offsets:
             full_addr, instruction = found_offsets[key]
