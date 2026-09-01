@@ -9,5 +9,6 @@ This create inside the PS5 inside /data the file dump of your kernel
 
 To extract some information from your dump you have to do:
 ROPgadget --binary kdump_fw_70101.bin --rawArch x86 --rawMode 64 --rawEndian little --all --depth 15 > ropgadget_exhaustive.txt
-and after use the find_offset.py as:
+
+After use the find_offset.py as:
 python find_offset.py ropgadget_exhaustive.txt
